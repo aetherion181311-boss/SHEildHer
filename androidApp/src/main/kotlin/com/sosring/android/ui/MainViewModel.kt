@@ -1,31 +1,62 @@
 package com.sosring.android.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sosring.ble.AndroidBleManager
 import com.sosring.android.service.*
+import com.sosring.contacts.EmergencyContact
 import com.sosring.sos.SosEngine
 import com.sosring.sos.AppUiState
-import kotlinx.coroutines.flow.StateFlow
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
-    private val bleManager      = AndroidBleManager(app)
-    private val locationProvider= AndroidLocationProvider(app)
-    private val contactRepo     = InMemoryContactRepository()
-    private val smsService      = AndroidSmsService(app)
 
-    private val engine = SosEngine(
-        bleManager, locationProvider, contactRepo, smsService, viewModelScope
-    )
+    private val _appState = MutableStateFlow(AppUiState())
+    val appState: StateFlow<AppUiState> = _appState
 
-    val appState: StateFlow<AppUiState> = engine.appState
+    private val contactRepo = InMemoryContactRepository()
+    val contacts: StateFlow<List<EmergencyContact>> = contactRepo.contactsFlow
 
-    init { engine.init() }
+    private var engine: SosEngine? = null
 
-    fun triggerSos() = engine.handleTrigger()
-    fun cancelSos()  = engine.handleCancel()
+    init {
+        viewModelScope.launch {
+            try {
+                val bleManager       = AndroidBleManager(app)
+                val locationProvider = AndroidLocationProvider(app)
+                val smsService       = AndroidSmsService(app)
 
-    override fun onCleared() { engine.cleanup() }
+                engine = SosEngine(
+                    bleManager, locationProvider, contactRepo, smsService, viewModelScope
+                ).also {
+                    it.init()
+                    it.appState.collect { state -> _appState.value = state }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun triggerSos() = viewModelScope.launch {
+        try { engine?.handleTrigger() } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    fun cancelSos() = viewModelScope.launch {
+        try { engine?.handleCancel() } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    fun addContact(name: String, phone: String) = viewModelScope.launch {
+        contactRepo.addContact(EmergencyContact(name = name, phoneNumber = phone))
+    }
+
+    fun removeContact(id: Long) = viewModelScope.launch {
+        contactRepo.removeContact(id)
+    }
+
+    override fun onCleared() {
+        try { engine?.cleanup() } catch (e: Exception) { e.printStackTrace() }
+    }
 }
